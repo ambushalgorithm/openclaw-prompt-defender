@@ -1,43 +1,69 @@
 # openclaw-prompt-defender
 
-Built with: Kimi K2.5 (via Ollama Cloud) • OpenClaw v2026.2.4
+Built with: Claude Sonnet 4.5 • OpenClaw v2026.2.4 (custom branch with `before_tool_result` hook)
 
-**Prompt injection detection and jailbreak prevention** for OpenClaw — combining the best of `prompt-guard` and `detect-injection` using the **Plugin Gateway Pattern**.
+**Prompt injection detection and jailbreak prevention** for OpenClaw — combining the best detection methods from `prompt-guard`, `detect-injection`, and `openclaw-shield` using the **Plugin Gateway Pattern**.
 
-**Current Status:** ✅ Input filtering ready (via `message:received` hook) — Output filtering pending upstream OpenClaw contribution.
-
-See [docs/DESIGN.md](docs/DESIGN.md) for full architecture, design decisions, and implementation strategy.
+**Current Status:** 🔄 **Phase 3a** - Implementing prompt-guard patterns (500+ regex patterns across 3 tiers)
 
 ---
 
 ## Overview
 
-This project implements a security filter for OpenClaw that scans **user input** for prompt injection and jailbreak attempts before they reach the LLM model.
+A security plugin that scans **tool outputs** before they reach the LLM, preventing:
+- Prompt injection attacks
+- Jailbreak attempts
+- Secret/credential leakage
+- PII exposure
+- Malicious content injection
 
-**Short-term:** Input protection only (works immediately)  
-**Long-term:** Full bidirectional filtering via upstream OpenClaw contribution (see [docs/DESIGN.md](docs/DESIGN.md))
+**Sequential feature rollout:**
+1. ✅ **Phase 1-2**: Core infrastructure (plugin + service + logging)
+2. 🔄 **Phase 3a**: prompt-guard implementation (500+ regex patterns)
+3. ⏸️ **Phase 3b**: detect-injection (ML-based detection)
+4. ⏸️ **Phase 3c**: openclaw-shield (secrets/PII patterns)
 
-| Source | Strength | Ported |
-|--------|----------|--------|
-| **prompt-guard** | Fast pattern matching, 70% token reduction, SHIELD categories, owner bypass | ✅ |
-| **detect-injection** | Dual-layer scanning, HF-based vector detection, safety categories | ✅ |
+Each feature is **independently toggleable** via feature flags.
 
 ---
 
 ## Architecture
 
-Two-layer security filtering via **Plugin Gateway Pattern**:
+### Plugin Gateway Pattern
 
-- **Plugin** (TypeScript, sandboxed) — hooks into OpenClaw, delegates to service via HTTP
-- **Service** (Python/FastAPI, host) — runs prompt-guard, detect-injection, 1Password CLI
+```
+Tool Output (e.g., web_fetch, exec, read)
+    ↓
+OpenClaw before_tool_result hook
+    ↓
+Plugin (TypeScript, sandboxed)
+    ↓ HTTP POST /scan
+Security Service (Python/FastAPI, host)
+    ↓
+Tiered Pattern Matching (critical → high → medium)
+    ↓
+ALLOW / BLOCK / SANITIZE
+    ↓
+Back to OpenClaw → LLM (if allowed)
+```
 
-**Current:** User input flows through `message:received` hook → `/scan` endpoint → Security Service → Block/Allow  
-**Future:** Tool output filtering via `before_tool_result` hook (upstream contribution in progress)
+**Why this design:**
+- **Plugin** runs in OpenClaw's sandbox → can't access Python ML libraries
+- **Service** runs on host → full access to ML models, pattern libraries, system tools
+- **Hook timing** → `before_tool_result` intercepts output before LLM sees it
 
-See [docs/DESIGN.md](docs/DESIGN.md) for:
-- Full architecture diagram
-- The hook timing gap that requires upstream contribution
-- Our plan to contribute `before_tool_result` hook to OpenClaw
+---
+
+## Detection Methods (Feature Flags)
+
+Each scanner can be enabled/disabled independently:
+
+| Feature | Source | Patterns | Status |
+|---------|--------|----------|--------|
+| **prompt_guard** | [prompt-guard](https://github.com/seojoonkim/prompt-guard) | 500+ regex (3 tiers) | 🔄 Implementing |
+| **ml_detection** | [detect-injection](https://github.com/protectai/detect-injection) | HuggingFace DeBERTa | ⏸️ Phase 3b |
+| **secret_scanner** | [openclaw-shield](https://github.com/knostic/openclaw-shield) | Secrets/PII patterns | ⏸️ Phase 3c |
+| **content_moderation** | detect-injection | OpenAI API | ⏸️ Phase 3b |
 
 ---
 
@@ -46,60 +72,87 @@ See [docs/DESIGN.md](docs/DESIGN.md) for:
 ```
 openclaw-prompt-defender/
 ├── docs/
-│   └── DESIGN.md           # Architecture, design decisions, upstream plan
-├── plugin/                 # TypeScript plugin (runs in OpenClaw sandbox)
+│   └── DESIGN.md           # Architecture, design decisions
+│
+├── plugin/                 # TypeScript (runs in OpenClaw sandbox)
 │   ├── src/
+│   │   ├── index.ts        # Main plugin entry (before_tool_result hook)
+│   │   └── types/types.d.ts
 │   ├── openclaw.plugin.json
-│   └── package.json
-├── service/                # Python/FastAPI service (runs on host)
-│   ├── app.py
-│   └── requirements.txt
-├── config/
-│   └── example.openclaw.json
-└── README.md
+│   ├── package.json
+│   └── tsconfig.json
+│
+├── service/                # Python/FastAPI (runs on host)
+│   ├── app.py              # FastAPI service (/scan endpoint)
+│   ├── logger.py           # Persistent JSONL logging
+│   ├── patterns.py         # 🔄 Pattern definitions (YAML → Python)
+│   ├── scanner.py          # 🔄 Tiered scanning engine
+│   ├── decoder.py          # 🔄 Base64/encoding detection
+│   ├── config.py           # 🔄 Configuration management
+│   ├── requirements.txt
+│   └── Dockerfile          # For end-to-end testing
+│
+├── TODO.md                 # Current task list
+└── README.md               # This file
 ```
 
 ---
 
-## Quick Start
+## Quick Start (Docker Testing)
+
+### 1. Build and Run Service
 
 ```bash
-# 1. Install service dependencies
-cd ~/Projects/openclaw-prompt-defender/service
-pip install -r requirements.txt
-
-# 2. Start the service (Terminal 1)
-python app.py
-# → Service running on http://127.0.0.1:8080
-
-# 3. Build and install plugin (Terminal 2)
-cd ~/Projects/openclaw-prompt-defender/plugin
-npm install && npm run build
-
-# 4. Configure OpenClaw (see example below)
-# Add plugin config to ~/.openclaw/openclaw.json
-
-# 5. Restart OpenClaw
-openclaw gateway restart
+cd ~/Projects/openclaw-plugins/openclaw-prompt-defender/service
+docker build -t prompt-defender:latest .
+docker run -d \
+  -p 8080:8080 \
+  -v ~/.openclaw/logs:/root/.openclaw/logs \
+  --name prompt-defender \
+  prompt-defender:latest
 ```
 
----
+### 2. Build and Install Plugin
 
-## OpenClaw Configuration
+```bash
+cd ~/Projects/openclaw-plugins/openclaw-prompt-defender/plugin
+npm install && npm run build
+
+# Link into OpenClaw extensions
+mkdir -p ~/.openclaw/extensions
+ln -s $(pwd)/dist ~/.openclaw/extensions/prompt-defender
+```
+
+### 3. Configure OpenClaw
+
+Edit `~/.openclaw/openclaw.json`:
 
 ```json
 {
   "plugins": {
-    "load": {
+    "entries": {
       "prompt-defender": {
-        "package": "~/Projects/openclaw-prompt-defender/plugin",
+        "enabled": true,
         "config": {
           "service_url": "http://127.0.0.1:8080",
           "timeout_ms": 5000,
           "fail_open": true,
+          
           "owner_ids": ["1461460866850357345"],
-          "scan_input": true,
-          "scan_output": false
+          
+          "features": {
+            "prompt_guard": true,
+            "ml_detection": false,
+            "secret_scanner": false,
+            "content_moderation": false
+          },
+          
+          "prompt_guard": {
+            "scan_tier": 1,
+            "hash_cache": true,
+            "decode_base64": true,
+            "multilang": ["en", "ko", "ja", "zh"]
+          }
         }
       }
     }
@@ -107,80 +160,78 @@ openclaw gateway restart
 }
 ```
 
-**Note:** `scan_output` is currently disabled (`false`) because the `tool_result_persist` hook fires **after** the LLM has already seen the content. Output filtering will be enabled after we contribute the `before_tool_result` hook upstream.
+### 4. Restart OpenClaw
 
----
-
-## Plugin Manifest (`openclaw.plugin.json`)
-
-```json
-{
-  "name": "openclaw-prompt-defender",
-  "version": "0.1.0",
-  "description": "Prompt injection detection and jailbreak prevention for OpenClaw",
-  "entry": "dist/index.js",
-  "hooks": {
-    "message:received": {
-      "description": "Scan user messages for prompt injection and jailbreak attempts"
-    }
-  },
-  "configSchema": {
-    "type": "object",
-    "properties": {
-      "service_url": {
-        "type": "string",
-        "default": "http://127.0.0.1:8080"
-      },
-      "timeout_ms": {
-        "type": "number",
-        "default": 5000
-      },
-      "fail_open": {
-        "type": "boolean",
-        "default": true,
-        "description": "Allow on service failure"
-      },
-      "owner_ids": {
-        "type": "array",
-        "items": { "type": "string" },
-        "description": "Trusted user IDs (bypass scanning)"
-      },
-      "scan_input": {
-        "type": "boolean",
-        "default": true,
-        "description": "Enable message_received scanning (injection/jailbreak detection)"
-      },
-      "scan_output": {
-        "type": "boolean",
-        "default": false,
-        "description": "Enable output scanning (pending upstream hook contribution)"
-      }
-    },
-    "required": ["service_url"]
-  }
-}
+```bash
+# Using custom branch with before_tool_result hook
+cd ~/Projects/openclaw-development
+openclaw gateway restart
 ```
 
 ---
 
-## Filter Profiles
+## Configuration Reference
 
-| Profile | Type | Checks | Action | Status |
-|---------|------|--------|--------|--------|
-| **Input (strict)** | `input` | Injection, jailbreak, obfuscation, SHIELD categories | Block or allow | ✅ **Ready** |
-| **Output (moderate)** | `output` | PII scrub, content safety, size limit | Sanitize or allow | ⏳ **Pending upstream** |
+### Top-Level Config
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `service_url` | string | `http://127.0.0.1:8080` | Security service endpoint |
+| `timeout_ms` | number | `5000` | Request timeout |
+| `fail_open` | boolean | `true` | Allow on service failure |
+| `owner_ids` | array | `[]` | Trusted user IDs (bypass scanning) |
+
+### Feature Flags (`features.*`)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `prompt_guard` | `true` | 500+ regex patterns (3 tiers) |
+| `ml_detection` | `false` | HuggingFace ML model (requires `HF_TOKEN`) |
+| `secret_scanner` | `false` | Secrets/PII detection |
+| `content_moderation` | `false` | OpenAI API moderation (requires `OPENAI_API_KEY`) |
+
+### prompt_guard Config (`prompt_guard.*`)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `scan_tier` | `1` | 0=critical, 1=+high, 2=+medium |
+| `hash_cache` | `true` | Skip repeated content (~70% token reduction) |
+| `decode_base64` | `true` | Detect Base64/URL encoded attacks |
+| `multilang` | `["en"]` | Languages to scan (en, ko, ja, zh, etc.) |
 
 ---
 
-## Error Handling — Fail Open
+## Tiered Scanning (prompt_guard)
 
-By default, the plugin uses **fail-open** strategy: if the security service is unreachable, times out, or errors, the plugin allows and logs a warning. This prevents the security filter outage from blocking all agent functionality.
+Progressive pattern loading for performance:
+
+| Tier | Patterns | Load When | Scan Time |
+|------|----------|-----------|-----------|
+| **0: Critical** | ~30 | Always | <5ms |
+| **1: High** | ~70 | After Tier 0 match OR tier=1+ | <15ms |
+| **2: Medium** | ~200+ | After Tier 1 match OR tier=2 | <50ms |
+
+**Result:** ~70% token reduction while maintaining detection accuracy.
+
+---
+
+## Owner Bypass
+
+Trusted users skip all scanning for zero overhead:
+
+```json
+{
+  "owner_ids": ["1461460866850357345"]
+}
+```
+
+When a tool output is from an owner's action, the service returns immediate ALLOW without pattern matching.
 
 ---
 
 ## Logging
 
-The service logs all security events to `~/.openclaw/logs/` following OpenClaw's standard logging pattern:
+All security events are logged to `~/.openclaw/logs/` in JSONL format:
 
 ### Log Files
 
@@ -188,31 +239,26 @@ The service logs all security events to `~/.openclaw/logs/` following OpenClaw's
 ~/.openclaw/logs/
 ├── config-audit.jsonl                     # OpenClaw system logs
 ├── prompt-defender-threats.jsonl          # Blocked attacks only
-├── prompt-defender-scans.jsonl            # All scan events (allowed + blocked)
+├── prompt-defender-scans.jsonl            # All scan events
 └── prompt-defender-summary.json           # Daily statistics
 ```
 
-### Log Format (JSONL)
+### Example Log Entries
 
-**Threats** (`prompt-defender-threats.jsonl`):
+**Threat** (`prompt-defender-threats.jsonl`):
 ```json
-{"timestamp":"2026-02-14T13:45:32.123456","severity":"high","tool":"message","patterns":["ignore all previous","disregard your guidelines"],"categories":["instruction_override","jailbreak"],"content_hash":"a1b2c3d4e5f6g7h8"}
+{"timestamp":"2026-02-14T13:45:32.123456","severity":"high","tool":"web_fetch","patterns":["ignore all previous","disregard your guidelines"],"categories":["instruction_override","jailbreak"],"content_hash":"a1b2c3d4e5f6g7h8"}
 ```
 
-**Scans** (`prompt-defender-scans.jsonl`):
+**Scan** (`prompt-defender-scans.jsonl`):
 ```json
-{"timestamp":"2026-02-14T13:45:32.789012","action":"block","tool_name":"message","severity":"high","pattern_count":2,"duration_ms":12,"categories":["instruction_override","jailbreak"]}
-{"timestamp":"2026-02-14T13:46:10.456789","action":"allow","tool_name":"message","severity":"safe","pattern_count":0,"duration_ms":3}
+{"timestamp":"2026-02-14T13:45:32.789012","action":"block","tool_name":"web_fetch","severity":"high","pattern_count":2,"duration_ms":12,"categories":["instruction_override","jailbreak"]}
 ```
 
-### Statistics Endpoint
+### Statistics API
 
 ```bash
-# Get threat stats for last 24 hours
-curl http://127.0.0.1:8080/stats
-
-# Custom time window (last 7 days)
-curl http://127.0.0.1:8080/stats?hours=168
+curl http://127.0.0.1:8080/stats?hours=24
 ```
 
 **Response:**
@@ -221,84 +267,241 @@ curl http://127.0.0.1:8080/stats?hours=168
   "period_hours": 24,
   "total_scans": 142,
   "total_threats": 3,
-  "by_severity": {
-    "high": 2,
-    "medium": 1
-  },
-  "by_category": {
-    "instruction_override": 2,
-    "jailbreak": 1,
-    "secret_exfiltration": 1
-  },
-  "by_tool": {
-    "message": 3
-  }
+  "by_severity": {"high": 2, "medium": 1},
+  "by_category": {"instruction_override": 2, "jailbreak": 1},
+  "by_tool": {"web_fetch": 2, "exec": 1}
 }
 ```
 
-### Privacy
+---
 
-- Content is **hashed** (SHA-256, first 16 chars) for deduplication
-- Full message content is **never logged** by default
-- Content preview logging can be enabled (commented out in `logger.py`)
+## Pattern Categories (prompt_guard)
+
+### Tier 0: Critical (Always Loaded)
+
+- **data_exfiltration** - Reading config files, env vars, credentials
+- **system_destruction** - `rm -rf`, fork bombs
+- **sql_injection** - DROP TABLE, TRUNCATE
+- **xss** - `<script>`, `javascript:`
+- **prompt_extraction** - Requesting system prompts
+- **phishing** - Password reset templates
+- **mcp_abuse** - Tool exploitation
+- **unicode_tag** - Invisible instruction injection
+
+### Tier 1: High (Load After Critical Match)
+
+- **instruction_override** - "Ignore all previous instructions" (10 languages)
+- **jailbreak** - DAN mode, "Do Anything Now"
+- **system_impersonation** - Fake system/admin messages
+- **system_mimicry** - Fake XML/prompt tags
+- **token_smuggling** - Zero-width characters
+- **system_file_access** - `/etc/passwd`, `.ssh/`
+- **scenario_jailbreak** - Story/research bypass
+- **hooks_hijacking** - Auto-approve exploitation
+- **gitignore_bypass** - Reading `.env` files
+
+### Tier 2: Medium (Deep Scan Mode)
+
+- **role_manipulation** - "You are now...", "Pretend to be..."
+- **authority_impersonation** - "I am the admin"
+- **context_hijacking** - Session manipulation
+- (200+ additional patterns)
 
 ---
 
-## Source Projects
+## API Reference
 
-| Project | Location | License | Notes |
-|---------|----------|---------|-------|
-| prompt-guard (fork) | `~/Projects/openclaw-skills/prompt-guard` | MIT | Owner bypass added |
-| detect-injection (fork) | `~/Projects/openclaw-skills/detect-injection` | Apache 2.0 | Owner bypass added |
-| original prompt-guard | `seojoonkim/prompt-guard` | MIT | Upstream |
-| original detect-injection | `protectai/detect-injection` | Apache 2.0 | Upstream |
+### POST /scan
+
+**Request:**
+```json
+{
+  "type": "output",
+  "tool_name": "web_fetch",
+  "content": "Content to scan...",
+  "is_error": false,
+  "duration_ms": 120,
+  "source": "user_id_here"
+}
+```
+
+**Response:**
+```json
+{
+  "action": "block",
+  "reason": "Potential prompt injection detected (2 pattern(s) matched)",
+  "matches": [
+    {
+      "pattern": "ignore all previous",
+      "severity": "high",
+      "type": "instruction_override",
+      "lang": "en"
+    }
+  ]
+}
+```
+
+**Actions:**
+- `allow` - Pass through to LLM
+- `block` - Drop output, return error to user
+- `sanitize` - Redact sensitive content, pass sanitized version (future)
+
+### GET /health
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "service": "prompt-defender",
+  "version": "0.1.0"
+}
+```
+
+### GET /stats?hours=24
+
+**Response:** See Logging section above.
+
+### GET /patterns
+
+**Response:**
+```json
+{
+  "patterns": ["pattern1", "pattern2", ...],
+  "count": 500
+}
+```
 
 ---
 
-## Documentation
+## Error Handling
 
-| Document | Purpose |
-|----------|---------|
-| [docs/DESIGN.md](docs/DESIGN.md) | Full architecture, hook timing analysis, upstream contribution plan |
-| This README | Quick start, configuration reference, current status |
+**Fail-Open Strategy:**
+- Service unreachable → ALLOW + log warning
+- Service timeout → ALLOW + log warning
+- Service error → ALLOW + log error
+
+This prevents security filter outages from breaking the agent.
+
+**Override:**
+```json
+{
+  "fail_open": false  // Fail-closed: block on error
+}
+```
+
+---
+
+## Testing
+
+### Unit Tests
+```bash
+cd service
+pytest tests/
+```
+
+### Integration Tests (Docker)
+```bash
+cd service
+docker-compose up --build
+docker exec -it prompt-defender pytest tests/integration/
+```
+
+### End-to-End Tests
+```bash
+# Start service in Docker
+docker-compose up -d
+
+# Run OpenClaw with test suite
+cd ~/Projects/openclaw-development
+npm test -- --grep "prompt-defender"
+```
+
+---
+
+## Development
+
+### Add New Pattern
+
+1. Edit `service/patterns.py`:
+```python
+CRITICAL_PATTERNS.append(Pattern(
+    pattern=r"your_regex_here",
+    severity="critical",
+    category="your_category",
+    lang="en"
+))
+```
+
+2. Restart service:
+```bash
+docker restart prompt-defender
+```
+
+3. Test:
+```bash
+curl -X POST http://127.0.0.1:8080/scan \
+  -H "Content-Type: application/json" \
+  -d '{"type":"output","tool_name":"test","content":"your test string"}'
+```
+
+### Debug Logs
+
+Service logs to stdout (Docker):
+```bash
+docker logs -f prompt-defender
+```
+
+Plugin logs to OpenClaw's logger:
+```bash
+tail -f ~/.openclaw/logs/*.log
+```
 
 ---
 
 ## Roadmap
 
-### Phase 1: Input Filtering (v0.1.0) — Ready to Implement
-- ✅ Prompt injection detection via `message:received` hook
-- ✅ Jailbreak prevention
-- ✅ Owner bypass for trusted users
-- ✅ Multi-language support (10 languages)
+### ✅ Phase 1-2: Infrastructure (Complete)
+- [x] Plugin skeleton (TypeScript)
+- [x] Service skeleton (Python/FastAPI)
+- [x] Docker support
+- [x] Persistent logging (JSONL)
+- [x] `/scan` endpoint
+- [x] Basic pattern detection
 
-### Phase 2: Upstream Contribution — In Progress
-- 🔄 Contribute `before_tool_result` hook to OpenClaw
-- 🔄 Implement at SDK level (all tools)
-- 🔄 Tests and documentation
+### 🔄 Phase 3a: prompt-guard (In Progress)
+- [ ] Port 500+ YAML patterns to Python
+- [ ] Implement tiered scanning engine
+- [ ] Add hash cache (deduplication)
+- [ ] Add Base64/URL decoding
+- [ ] Multi-language support
+- [ ] Owner bypass
+- [ ] End-to-end testing
 
-### Phase 3: Output Filtering (v0.2.0) — After Upstream Merge
-- ⏳ Tool output scanning via new hook
-- ⏳ PII detection and redaction
-- ⏳ Content safety filtering
+### ⏸️ Phase 3b: detect-injection
+- [ ] HuggingFace ML model integration
+- [ ] OpenAI content moderation
+- [ ] Dual-layer scanning (patterns + ML)
 
-### Phase 4: Polish (v1.0.0)
-- Hash cache for performance
-- 1Password CLI integration
-- Admin dashboard
-- Comprehensive test suite
+### ⏸️ Phase 3c: openclaw-shield
+- [ ] Secrets detection (AWS keys, GitHub tokens, etc.)
+- [ ] PII detection (SSN, credit cards, emails)
+- [ ] Sensitive file patterns
 
-See [docs/DESIGN.md](docs/DESIGN.md) for detailed implementation phases and the hook timing gap that necessitates this approach.
+### 📋 Phase 4: Polish
+- [ ] Comprehensive test suite
+- [ ] Performance benchmarks
+- [ ] Admin dashboard
+- [ ] Documentation complete
 
 ---
 
-## Why Input First?
+## Source Projects
 
-The `message:received` hook fires **before** the LLM processes user messages, allowing us to block injection attempts immediately. This is fully functional and provides immediate value.
-
-Output filtering via `tool_result_persist` has a **timing gap** — it fires after the LLM has already seen the tool output. We're solving this by contributing a new `before_tool_result` hook to OpenClaw.
-
-See [docs/DESIGN.md](docs/DESIGN.md) for the technical analysis.
+| Project | License | Notes |
+|---------|---------|-------|
+| [prompt-guard](https://github.com/seojoonkim/prompt-guard) | MIT | 500+ regex patterns, tiered loading |
+| [detect-injection](https://github.com/protectai/detect-injection) | Apache 2.0 | ML-based detection, content moderation |
+| [openclaw-shield](https://github.com/knostic/openclaw-shield) | Apache 2.0 | Secrets/PII patterns |
 
 ---
 
@@ -306,20 +509,25 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the technical analysis.
 
 | Project | Focus | Complementary? |
 |---------|-------|----------------|
-| [Knostic Shield](https://github.com/knostic/openclaw-shield) | Secrets, PII, destructive commands | ✅ Yes — use both |
-| Our Prompt Defender | Prompt injection, jailbreak | ✅ Different threats |
+| [Knostic Shield](https://github.com/knostic/openclaw-shield) | Secrets, PII, destructive commands | ✅ Yes - different hooks |
+| openclaw-prompt-defender | Tool output injection prevention | ✅ Use both for defense-in-depth |
 
-**Recommendation:** Use Knostic Shield for data protection + Our Prompt Defender for input validation.
+**Recommendation:** Use both plugins together - Shield for input/exec protection, Defender for output validation.
 
 ---
 
 ## License
 
-Dual-licensed under MIT and Apache 2.0 (to match source projects).
+MIT License (matching prompt-guard upstream)
 
 ---
 
-*Project created: 2026-02-11*  
-*Repository: https://github.com/crayon-doing-petri/openclaw-prompt-defender*  
-*Status: Phase 1 — Input filtering implementation*  
-*Upstream: Contributing `before_tool_result` hook to OpenClaw*
+## Contributing
+
+See [TODO.md](TODO.md) for current task list and implementation priorities.
+
+---
+
+**Repository:** https://github.com/ambushalgorithm/openclaw-prompt-defender  
+**Status:** Phase 3a - Implementing prompt-guard patterns  
+**OpenClaw Branch:** Custom build with `before_tool_result` hook (`~/Projects/openclaw-development`)
