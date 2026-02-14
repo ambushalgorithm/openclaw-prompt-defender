@@ -6,6 +6,8 @@ Built with: Claude Sonnet 4.5 • OpenClaw v2026.2.4 (custom branch with `before
 
 **Current Status:** 🔄 **Phase 3a** - Implementing prompt-guard patterns (500+ regex patterns across 3 tiers)
 
+**Testing:** All end-to-end tests run in Docker containers for reproducibility.
+
 ---
 
 ## Overview
@@ -27,30 +29,22 @@ Each feature is **independently toggleable** via feature flags.
 
 ---
 
-## Architecture
+## How It Works
 
-### Plugin Gateway Pattern
+**High-Level Flow:**
 
-```
-Tool Output (e.g., web_fetch, exec, read)
-    ↓
-OpenClaw before_tool_result hook
-    ↓
-Plugin (TypeScript, sandboxed)
-    ↓ HTTP POST /scan
-Security Service (Python/FastAPI, host)
-    ↓
-Tiered Pattern Matching (critical → high → medium)
-    ↓
-ALLOW / BLOCK / SANITIZE
-    ↓
-Back to OpenClaw → LLM (if allowed)
-```
+1. Tool executes (e.g., `web_fetch`, `exec`, `read`)
+2. `before_tool_result` hook intercepts the output
+3. Plugin sends output to security service for scanning
+4. Service checks patterns (and optionally ML models)
+5. Returns verdict: ALLOW, BLOCK, or SANITIZE
+6. Plugin enforces verdict before LLM sees the content
 
-**Why this design:**
-- **Plugin** runs in OpenClaw's sandbox → can't access Python ML libraries
-- **Service** runs on host → full access to ML models, pattern libraries, system tools
-- **Hook timing** → `before_tool_result` intercepts output before LLM sees it
+**Why separate plugin and service?**
+- Plugin (TypeScript) → Runs in OpenClaw's sandbox, handles hooks
+- Service (Python) → Runs on host, has access to ML libraries and pattern matching
+
+See [docs/DESIGN.md](docs/DESIGN.md) for detailed architecture and algorithms.
 
 ---
 
@@ -98,11 +92,36 @@ openclaw-prompt-defender/
 
 ---
 
-## Quick Start (Docker Testing)
+## Quick Start
 
-### 1. Build and Run Service
+### Development Setup (Local)
 
 ```bash
+# 1. Install service dependencies
+cd ~/Projects/openclaw-plugins/openclaw-prompt-defender/service
+pip install -r requirements.txt
+
+# 2. Start the service
+python app.py
+# → Service running on http://127.0.0.1:8080
+
+# 3. Build plugin (separate terminal)
+cd ~/Projects/openclaw-plugins/openclaw-prompt-defender/plugin
+npm install && npm run build
+
+# 4. Configure OpenClaw (~/.openclaw/openclaw.json)
+# See Configuration section below
+
+# 5. Restart OpenClaw
+openclaw gateway restart
+```
+
+### Docker Testing (End-to-End)
+
+**All testing is done in Docker containers** to ensure reproducibility:
+
+```bash
+# Start service container
 cd ~/Projects/openclaw-plugins/openclaw-prompt-defender/service
 docker build -t prompt-defender:latest .
 docker run -d \
@@ -110,63 +129,15 @@ docker run -d \
   -v ~/.openclaw/logs:/root/.openclaw/logs \
   --name prompt-defender \
   prompt-defender:latest
+
+# Test the service
+curl http://localhost:8080/health
+
+# Run end-to-end tests
+docker exec -it prompt-defender pytest tests/
 ```
 
-### 2. Build and Install Plugin
-
-```bash
-cd ~/Projects/openclaw-plugins/openclaw-prompt-defender/plugin
-npm install && npm run build
-
-# Link into OpenClaw extensions
-mkdir -p ~/.openclaw/extensions
-ln -s $(pwd)/dist ~/.openclaw/extensions/prompt-defender
-```
-
-### 3. Configure OpenClaw
-
-Edit `~/.openclaw/openclaw.json`:
-
-```json
-{
-  "plugins": {
-    "entries": {
-      "prompt-defender": {
-        "enabled": true,
-        "config": {
-          "service_url": "http://127.0.0.1:8080",
-          "timeout_ms": 5000,
-          "fail_open": true,
-          
-          "owner_ids": ["1461460866850357345"],
-          
-          "features": {
-            "prompt_guard": true,
-            "ml_detection": false,
-            "secret_scanner": false,
-            "content_moderation": false
-          },
-          
-          "prompt_guard": {
-            "scan_tier": 1,
-            "hash_cache": true,
-            "decode_base64": true,
-            "multilang": ["en", "ko", "ja", "zh"]
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-### 4. Restart OpenClaw
-
-```bash
-# Using custom branch with before_tool_result hook
-cd ~/Projects/openclaw-development
-openclaw gateway restart
-```
+**Note:** Plugin integration testing requires OpenClaw running with the `before_tool_result` hook. See [Testing](#testing) section.
 
 ---
 
@@ -203,15 +174,13 @@ openclaw gateway restart
 
 ## Tiered Scanning (prompt_guard)
 
-Progressive pattern loading for performance:
+Patterns are loaded progressively for performance:
 
-| Tier | Patterns | Load When | Scan Time |
-|------|----------|-----------|-----------|
-| **0: Critical** | ~30 | Always | <5ms |
-| **1: High** | ~70 | After Tier 0 match OR tier=1+ | <15ms |
-| **2: Medium** | ~200+ | After Tier 1 match OR tier=2 | <50ms |
+- **Tier 0** (Critical): ~30 patterns, always loaded, <5ms
+- **Tier 1** (High): +70 patterns, loaded after critical match, <15ms
+- **Tier 2** (Medium): +200 patterns, deep scan mode, <50ms
 
-**Result:** ~70% token reduction while maintaining detection accuracy.
+Result: ~70% faster scanning while maintaining accuracy. See [DESIGN.md](docs/DESIGN.md) for algorithm details.
 
 ---
 
@@ -275,101 +244,24 @@ curl http://127.0.0.1:8080/stats?hours=24
 
 ---
 
-## Pattern Categories (prompt_guard)
+## Detection Categories
 
-### Tier 0: Critical (Always Loaded)
+**Tier 0 (Critical):** Secret exfiltration, SQL injection, XSS, system destruction  
+**Tier 1 (High):** Instruction override, jailbreak, system impersonation  
+**Tier 2 (Medium):** Role manipulation, authority impersonation, context hijacking
 
-- **data_exfiltration** - Reading config files, env vars, credentials
-- **system_destruction** - `rm -rf`, fork bombs
-- **sql_injection** - DROP TABLE, TRUNCATE
-- **xss** - `<script>`, `javascript:`
-- **prompt_extraction** - Requesting system prompts
-- **phishing** - Password reset templates
-- **mcp_abuse** - Tool exploitation
-- **unicode_tag** - Invisible instruction injection
-
-### Tier 1: High (Load After Critical Match)
-
-- **instruction_override** - "Ignore all previous instructions" (10 languages)
-- **jailbreak** - DAN mode, "Do Anything Now"
-- **system_impersonation** - Fake system/admin messages
-- **system_mimicry** - Fake XML/prompt tags
-- **token_smuggling** - Zero-width characters
-- **system_file_access** - `/etc/passwd`, `.ssh/`
-- **scenario_jailbreak** - Story/research bypass
-- **hooks_hijacking** - Auto-approve exploitation
-- **gitignore_bypass** - Reading `.env` files
-
-### Tier 2: Medium (Deep Scan Mode)
-
-- **role_manipulation** - "You are now...", "Pretend to be..."
-- **authority_impersonation** - "I am the admin"
-- **context_hijacking** - Session manipulation
-- (200+ additional patterns)
+See [DESIGN.md](docs/DESIGN.md) for complete pattern category breakdown.
 
 ---
 
-## API Reference
+## API Endpoints
 
-### POST /scan
+- `POST /scan` - Scan content for threats (returns action: allow/block/sanitize)
+- `GET /health` - Health check
+- `GET /stats?hours=24` - Threat statistics
+- `GET /patterns` - List active patterns
 
-**Request:**
-```json
-{
-  "type": "output",
-  "tool_name": "web_fetch",
-  "content": "Content to scan...",
-  "is_error": false,
-  "duration_ms": 120,
-  "source": "user_id_here"
-}
-```
-
-**Response:**
-```json
-{
-  "action": "block",
-  "reason": "Potential prompt injection detected (2 pattern(s) matched)",
-  "matches": [
-    {
-      "pattern": "ignore all previous",
-      "severity": "high",
-      "type": "instruction_override",
-      "lang": "en"
-    }
-  ]
-}
-```
-
-**Actions:**
-- `allow` - Pass through to LLM
-- `block` - Drop output, return error to user
-- `sanitize` - Redact sensitive content, pass sanitized version (future)
-
-### GET /health
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "service": "prompt-defender",
-  "version": "0.1.0"
-}
-```
-
-### GET /stats?hours=24
-
-**Response:** See Logging section above.
-
-### GET /patterns
-
-**Response:**
-```json
-{
-  "patterns": ["pattern1", "pattern2", ...],
-  "count": 500
-}
-```
+See [DESIGN.md](docs/DESIGN.md) for detailed API documentation.
 
 ---
 
@@ -393,28 +285,22 @@ This prevents security filter outages from breaking the agent.
 
 ## Testing
 
-### Unit Tests
+All end-to-end testing is done in Docker containers:
+
 ```bash
+# Build and start service
 cd service
-pytest tests/
+docker build -t prompt-defender:latest .
+docker run -d -p 8080:8080 --name prompt-defender prompt-defender:latest
+
+# Run tests inside container
+docker exec -it prompt-defender pytest tests/
+
+# Check logs
+docker logs -f prompt-defender
 ```
 
-### Integration Tests (Docker)
-```bash
-cd service
-docker-compose up --build
-docker exec -it prompt-defender pytest tests/integration/
-```
-
-### End-to-End Tests
-```bash
-# Start service in Docker
-docker-compose up -d
-
-# Run OpenClaw with test suite
-cd ~/Projects/openclaw-development
-npm test -- --grep "prompt-defender"
-```
+See [TODO.md](TODO.md) for detailed testing checklist.
 
 ---
 
