@@ -6,8 +6,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app
-COPY app.py .
+# Copy all Python modules
+COPY *.py ./
 
 # Expose port
 EXPOSE 8080

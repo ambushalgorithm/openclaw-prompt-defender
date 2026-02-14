@@ -1,4 +1,4 @@
-"""
+r"""
 Encoding detection and decoding module.
 
 Detects and decodes:
