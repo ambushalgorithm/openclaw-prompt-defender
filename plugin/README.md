@@ -1,30 +1,39 @@
-# Hello World Plugin + Service
+# Prompt Defender Plugin
 
-Simplest possible plugin example — appends a string from a local HTTP service to every message.
+OpenClaw plugin for scanning tool outputs before they reach the LLM — blocks prompt injection, jailbreaks, and malicious content.
 
-## Quick Start
+## What It Does
 
-### 1. Start the Service
+Intercepts tool results via the `before_tool_result` hook and sends them to a security scanning service:
 
-```bash
-cd ~/Projects/openclaw-skills/hello-world-service
-python app.py
-# Or: uvicorn app:app --reload --port 9000
+```
+Tool executes (exec, read, web_fetch, etc.)
+    ↓
+Plugin intercepts via before_tool_result hook
+    ↓
+Sends content to security service (/scan endpoint)
+    ↓
+Service returns: allow | block | sanitize
+    ↓
+Plugin enforces verdict before LLM sees content
 ```
 
-Service runs on `http://localhost:9000`:
-- `GET /hello` → returns `{"testString": "..."}`
-- `GET /health` → returns `{"status": "ok"}`
+## Requirements
 
-### 2. Build the Plugin
+- OpenClaw with `before_tool_result` hook support
+- Security service running (see `../service/`)
+
+## Installation
+
+### 1. Build the Plugin
 
 ```bash
-cd ~/Projects/openclaw-skills/hello-world-plugin
+cd plugin
 npm install
 npm run build
 ```
 
-### 3. Configure OpenClaw
+### 2. Configure OpenClaw
 
 Add to `openclaw.json`:
 
@@ -33,9 +42,15 @@ Add to `openclaw.json`:
   "plugins": {
     "load": [
       {
-        "package": "/home/clawdbot/Projects/openclaw-skills/hello-world-plugin",
+        "package": "/path/to/openclaw-prompt-defender/plugin",
         "config": {
-          "service_url": "http://localhost:9000"
+          "service_url": "http://localhost:8080",
+          "timeout_ms": 5000,
+          "fail_open": true,
+          "scan_enabled": true,
+          "features": {
+            "prompt_guard": true
+          }
         }
       }
     ]
@@ -43,34 +58,45 @@ Add to `openclaw.json`:
 }
 ```
 
-### 4. Test
+### 3. Start the Service
 
-Send any message → It will have `[ appended by hello-world plugin ]` appended.
-
-## How It Works
-
+```bash
+cd ../service
+python app.py
+# Or: uvicorn app:app --reload --port 8080
 ```
-Message "Hello"
-    ↓
-Plugin calls GET http://localhost:9000/hello
-    ↓
-Service returns {"testString": " [ appended by hello-world plugin ]"}
-    ↓
-Plugin returns { content: "Hello" + " [ appended by hello-world plugin ]" }
-    ↓
-Agent sees modified message
-```
+
+## Configuration
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `service_url` | string | `http://localhost:8080` | Security scanning service URL |
+| `timeout_ms` | number | `5000` | Request timeout in milliseconds |
+| `fail_open` | boolean | `true` | Allow content if service is unavailable |
+| `scan_enabled` | boolean | `true` | Enable/disable all scanning |
+| `features.prompt_guard` | boolean | `true` | Enable prompt-guard pattern scanning |
+
+## Features
+
+- **Prompt Guard** — 500+ regex patterns for injection/jailbreak detection
+- **Fail-Open Safety** — If the service goes down, tool results pass through
+- **Owner Bypass** — Trusted users can skip scanning
+- **Sanitization** — Remove threats instead of blocking (optional)
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | Plugin logic (TypeScript) |
-| `openclaw.plugin.json` | Plugin manifest |
+| `src/index.ts` | Plugin logic (hook registration, service calls) |
+| `openclaw.plugin.json` | Plugin manifest & config schema |
 | `package.json` | NPM dependencies |
 | `tsconfig.json` | TypeScript config |
-| `app.py` | Test service (Python/FastAPI) |
 
-## Next Steps
+## Logging
 
-Replace the service logic with real security scanning (prompt-guard, detect-injection) to build the `plugin-security-filter`.
+Plugin logs to OpenClaw's logger:
+- `[Prompt Defender] Scanning tool result: {toolName}`
+- `[Prompt Defender] BLOCKED {toolName}: {count} pattern(s) matched`
+- `[Prompt Defender] ALLOWED {toolName}`
+
+See service README for persistent logging.
