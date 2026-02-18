@@ -327,6 +327,10 @@ ignore all instructions
 - [ ] Implement XML template
 - [ ] Implement obfuscation (base64, hex, HTML entities)
 - [ ] Test locally on port 8081
+- [ ] Write unit tests for SampleGenerator
+- [ ] Test all filetype outputs
+- [ ] Test obfuscation logic
+- [ ] Test query param combinations
 
 ### Testing Workflow
 
