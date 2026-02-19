@@ -315,7 +315,21 @@ This prevents security filter outages from breaking the agent.
 
 ## Testing
 
-All end-to-end testing is done in Docker containers:
+All end-to-end testing is done in Docker containers.
+
+The [openclaw-prompt-defender-test-samples](https://github.com/ambushalgorithm/openclaw-prompt-defender-test-samples) repo provides dynamic malicious test content for integration testing.
+
+```bash
+# Clone the test samples service
+git clone https://github.com/ambushalgorithm/openclaw-prompt-defender-test-samples.git service-test
+cd service-test
+
+# Install and run
+pip install -r requirements.txt
+python main.py  # Runs on port 8081
+```
+
+### Running Tests
 
 ```bash
 # Build and start service
