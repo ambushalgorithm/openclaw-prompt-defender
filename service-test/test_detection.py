@@ -6,9 +6,30 @@ Tests the scanner's ability to detect various attack types.
 import pytest
 import json
 import re
+from urllib.request import urlopen, Request
+from urllib.error import URLError
+import urllib.parse
 
-# NOTE: These tests require the scanner to be importable
-# Adjust import based on actual scanner location
+
+def http_get(url):
+    """Simple GET request without external dependencies."""
+    try:
+        with urlopen(url, timeout=10) as response:
+            return response.read().decode('utf-8'), response.status
+    except URLError as e:
+        return str(e), 500
+
+
+def http_post(url, data):
+    """Simple POST request without external dependencies."""
+    try:
+        import json
+        req = Request(url, data=json.dumps(data).encode('utf-8'))
+        req.add_header('Content-Type', 'application/json')
+        with urlopen(req, timeout=10) as response:
+            return response.read().decode('utf-8'), response.status
+    except URLError as e:
+        return str(e), 500
 
 
 # =============================================================================
@@ -279,75 +300,65 @@ class TestServiceIntegration:
 
     def test_generate_critical_html_detected(self):
         """Critical HTML from service should be detected."""
-        import requests
-        
         # Generate sample
-        resp = requests.get("http://localhost:8081/test/test?filetype=html&severity=critical")
-        assert resp.status_code == 200
+        resp_text, status = http_get("http://localhost:8081/test/test?filetype=html&severity=critical")
+        assert status == 200
         
-        sample = resp.text
+        sample = resp_text
         
         # Scan it (assuming scanner is on 8080)
-        scan_resp = requests.post("http://localhost:8080/scan", json={"content": sample})
+        scan_text, scan_status = http_post("http://localhost:8080/scan", {"content": sample})
         
         # Should be detected as threat
-        if scan_resp.status_code == 200:
-            result = scan_resp.json()
+        if scan_status == 200:
+            result = json.loads(scan_text)
             assert result.get("threat_detected") == True
 
     def test_generate_clean_html_not_detected(self):
         """Clean HTML from service should not be detected."""
-        import requests
-        
         # Generate clean sample
-        resp = requests.get("http://localhost:8081/test/test?clean=true&filetype=html")
-        assert resp.status_code == 200
+        resp_text, status = http_get("http://localhost:8081/test/test?clean=true&filetype=html")
+        assert status == 200
         
-        sample = resp.text
+        sample = resp_text
         
         # Scan it
-        scan_resp = requests.post("http://localhost:8080/scan", json={"content": sample})
+        scan_text, scan_status = http_post("http://localhost:8080/scan", {"content": sample})
         
-        if scan_resp.status_code == 200:
-            result = scan_resp.json()
+        if scan_status == 200:
+            result = json.loads(scan_text)
             # Clean should not be flagged as threat
             assert result.get("threat_detected") == False
 
     def test_sql_injection_detected(self):
         """SQL injection should be detected."""
-        import requests
+        resp_text, status = http_get("http://localhost:8081/test/test?filetype=html&attack_type=sql")
+        sample = resp_text
         
-        resp = requests.get("http://localhost:8081/test/test?filetype=html&attack_type=sql")
-        sample = resp.text
+        scan_text, scan_status = http_post("http://localhost:8080/scan", {"content": sample})
         
-        scan_resp = requests.post("http://localhost:8080/scan", json={"content": sample})
-        
-        if scan_resp.status_code == 200:
-            result = scan_resp.json()
+        if scan_status == 200:
+            result = json.loads(scan_text)
             assert result.get("threat_detected") == True
 
     def test_xss_detected(self):
         """XSS should be detected."""
-        import requests
+        resp_text, status = http_get("http://localhost:8081/test/test?filetype=html&attack_type=xss")
+        sample = resp_text
         
-        resp = requests.get("http://localhost:8081/test/test?filetype=html&attack_type=xss")
-        sample = resp.text
+        scan_text, scan_status = http_post("http://localhost:8080/scan", {"content": sample})
         
-        scan_resp = requests.post("http://localhost:8080/scan", json={"content": sample})
-        
-        if scan_resp.status_code == 200:
-            result = scan_resp.json()
+        if scan_status == 200:
+            result = json.loads(scan_text)
             assert result.get("threat_detected") == True
 
     def test_jailbreak_detected(self):
         """Jailbreak should be detected."""
-        import requests
+        resp_text, status = http_get("http://localhost:8081/test/test?filetype=txt&attack_type=jailbreak")
+        sample = resp_text
         
-        resp = requests.get("http://localhost:8081/test/test?filetype=txt&attack_type=jailbreak")
-        sample = resp.text
+        scan_text, scan_status = http_post("http://localhost:8080/scan", {"content": sample})
         
-        scan_resp = requests.post("http://localhost:8080/scan", json={"content": sample})
-        
-        if scan_resp.status_code == 200:
-            result = scan_resp.json()
+        if scan_status == 200:
+            result = json.loads(scan_text)
             assert result.get("threat_detected") == True
