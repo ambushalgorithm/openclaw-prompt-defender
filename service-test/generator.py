@@ -14,6 +14,9 @@ from templates import (
     get_random_secret,
     get_random_pii,
     get_random_dangerous_command,
+    get_random_sql_injection,
+    get_random_xss,
+    get_random_jailbreak,
     get_attack_templates,
     CLEAN_TEMPLATES,
 )
@@ -105,7 +108,13 @@ class SampleGenerator:
         elif params.attack_type == "pii":
             return get_random_pii()
         elif params.attack_type == "jailbreak":
-            return get_random_injection(params.lang, "critical").replace("action", "do anything")
+            return get_random_jailbreak()
+        elif params.attack_type == "sql":
+            return get_random_sql_injection()
+        elif params.attack_type == "xss":
+            return get_random_xss()
+        elif params.attack_type == "rce":
+            return get_random_dangerous_command()
         else:
             return get_random_injection(params.lang, params.severity)
 
