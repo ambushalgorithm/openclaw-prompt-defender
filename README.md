@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Plugin-TypeScript-blue?style=for-the-badge&logo=typescript" alt="TypeScript">
-  <img src="https://img.shields.io/badge/Service-Python-cyan?style=for-the-badge&logo=python" alt="Python">
+  <img src="https://img.shields.io/badge/Scanner-Python-cyan?style=for-the-badge&logo=python" alt="Python">
   <img src="https://img.shields.io/badge/OpenClaw-v2026.2.4-green?style=for-the-badge" alt="OpenClaw">
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge" alt="License">
 </p>
@@ -19,37 +19,45 @@
 - 👤 **PII exposure** — Personal information that shouldn't be shared
 - 💉 **Malicious content** — XSS, SQL injection, RCE attempts
 
+## ⚠️ Two Repos
+
+This plugin requires the **prompt-defender-scanner** service to work:
+
+| Repo | Description |
+|------|-------------|
+| **openclaw-prompt-defender** | This plugin — drops into OpenClaw |
+| **prompt-defender-scanner** | The scanner service — must be running separately |
+
 ## 🚀 Quick Start
 
 ### Prerequisites
 
 - OpenClaw v2026.2.4+
-- Python 3.12+
-- Docker (for testing)
+- Python 3.12+ (for the scanner)
+- Docker (optional, for the scanner)
 
-### Installation
-
-```bash
-# Clone the plugin
-git clone https://github.com/ambushalgorithm/openclaw-prompt-defender.git
-cd openclaw-prompt-defender
-
-# Install Python dependencies
-cd service && pip install -r requirements.txt
-
-# Build the plugin
-cd ../plugin && npm install
-```
-
-### Run the Service
+### Step 1: Start the Scanner
 
 ```bash
-cd service
+# Option A: Clone and run directly
+git clone https://github.com/ambushalgorithm/prompt-defender-scanner.git
+cd prompt-defender-scanner
+pip install -r requirements.txt
 python -m app
-# Service runs on http://localhost:8080
+# Scanner runs on http://localhost:8080
+
+# Option B: Docker
+docker run -d -p 8080:8080 ghcr.io/ambushalgorithm/prompt-defender-scanner
 ```
 
-### Configuration
+### Step 2: Install the Plugin
+
+```bash
+# Drop the plugin into your OpenClaw plugins directory
+cp -r openclaw-prompt-defender/plugin ~/.openclaw/plugins/prompt-defender
+```
+
+### Step 3: Configure OpenClaw
 
 Add to your OpenClaw config:
 
@@ -58,11 +66,13 @@ Add to your OpenClaw config:
   "plugins": {
     "enabled": ["prompt-defender"],
     "prompt-defender": {
-      "url": "http://localhost:8080"
+      "service_url": "http://localhost:8080"
     }
   }
 }
 ```
+
+The plugin defaults to `http://localhost:8080` — if you run the scanner there, no config needed!
 
 ## 🏗️ Architecture
 
@@ -72,10 +82,8 @@ User Input → OpenClaw → Tool Execution → [Plugin] → [Scanner Service] �
                                       Block if malicious
 ```
 
-**Two-part design:**
-
-1. **Plugin** (TypeScript) — Runs in OpenClaw's sandbox, handles hooks
-2. **Service** (Python/FastAPI) — Runs on host, does pattern matching & ML detection
+- **Plugin** (TypeScript) — Runs in OpenClaw, intercepts tool results, calls scanner API
+- **Scanner** (Python) — Standalone service that performs pattern matching & detection
 
 ## 🔍 Detection Methods
 
@@ -88,23 +96,20 @@ User Input → OpenClaw → Tool Execution → [Plugin] → [Scanner Service] �
 
 Each is independently toggleable via feature flags.
 
-## 📖 Usage Examples
-
-### Basic Scanning
+## 🧪 Testing the Scanner Directly
 
 ```bash
 # Scan text for threats
 curl -X POST "http://localhost:8080/scan" \
   -H "Content-Type: application/json" \
-  -d '{"content": "Hello world"}'
+  -d '{"type": "output", "content": "Hello world", "tool_name": "read"}'
 ```
 
 ### Response
 
 ```json
 {
-  "threat_detected": false,
-  "verdict": "ALLOW",
+  "action": "allow",
   "matches": []
 }
 ```
@@ -113,8 +118,8 @@ curl -X POST "http://localhost:8080/scan" \
 
 ```json
 {
-  "threat_detected": true,
-  "verdict": "BLOCK",
+  "action": "block",
+  "reason": "Potential prompt injection detected",
   "matches": [
     {
       "pattern": "[INST]",
@@ -125,81 +130,68 @@ curl -X POST "http://localhost:8080/scan" \
 }
 ```
 
-## 🧪 Testing
-
-We use [prompt-injection-testing](https://github.com/ambushalgorithm/prompt-injection-testing) for generating test samples:
-
-```bash
-# Clone test samples service
-git clone https://github.com/ambushalgorithm/prompt-injection-testing.git
-cd prompt-injection-testing
-pip install -r requirements.txt
-python main.py  # Runs on port 8081
-```
-
-### Run Tests
-
-```bash
-# Start scanner service
-cd service && python -m app &
-
-# Run tests
-pytest -v
-```
-
-See [Testing](#testing) section for more details.
-
 ## 📁 Project Structure
 
 ```
 openclaw-prompt-defender/
-├── plugin/                 # TypeScript plugin (OpenClaw sandbox)
+├── plugin/                 # TypeScript plugin (this repo)
 │   ├── src/
 │   │   └── index.ts       # before_tool_result hook
 │   └── openclaw.plugin.json
 │
-├── service/                # Python scanner service
-│   ├── app.py             # FastAPI /scan endpoint
-│   ├── scanner.py         # Tiered scanning engine
-│   ├── patterns.py        # Detection patterns
-│   └── Dockerfile
-│
 ├── docs/
 │   └── DESIGN.md          # Architecture details
 │
+├── docker-compose.yml      # For running both together (optional)
+│
 └── README.md
 ```
+
+**Scanner lives in:** [prompt-defender-scanner](https://github.com/ambushalgorithm/prompt-defender-scanner)
 
 ## 🔧 Configuration
 
 ```json
 {
+  "service_url": "http://localhost:8080",
+  "timeout_ms": 5000,
+  "fail_open": true,
+  "scan_enabled": true,
   "features": {
-    "prompt_guard": {
-      "enabled": true,
-      "tier": 2
-    },
-    "ml_detection": {
-      "enabled": false
-    }
-  },
-  "logging": {
-    "enabled": true,
-    "path": "./logs"
+    "prompt_guard": true
   }
 }
 ```
 
-## 🐳 Docker
+| Option | Default | Description |
+|--------|---------|-------------|
+| `service_url` | `http://localhost:8080` | Scanner API endpoint |
+| `timeout_ms` | `5000` | Request timeout |
+| `fail_open` | `true` | Allow if scanner unavailable |
+| `scan_enabled` | `true` | Enable/disable scanning |
+| `features.prompt_guard` | `true` | Toggle detection methods |
 
-```bash
-# Build and run
-cd service
-docker build -t prompt-defender .
-docker run -d -p 8080:8080 prompt-defender
+## 🐳 Docker Compose (Optional)
+
+To run both OpenClaw and the scanner together:
+
+```yaml
+# docker-compose.yml
+version: "3.8"
+
+services:
+  openclaw:
+    image: openclaw/openclaw:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ~/.openclaw:/home/clawdbot/.openclaw
+
+  scanner:
+    image: ghcr.io/ambushalgorithm/prompt-defender-scanner
+    ports:
+      - "8080:8080"
 ```
-
-Or use docker-compose:
 
 ```bash
 docker-compose up -d
@@ -207,7 +199,7 @@ docker-compose up -d
 
 ## 🤝 Contributing
 
-Contributions welcome! Check [TODO.md](TODO.md) for current tasks.
+Contributions welcome! The scanner logic lives in [prompt-defender-scanner](https://github.com/ambushalgorithm/prompt-defender-scanner).
 
 ## 📜 License
 
@@ -215,10 +207,10 @@ MIT License
 
 ## 🔗 Related Projects
 
+- [prompt-defender-scanner](https://github.com/ambushalgorithm/prompt-defender-scanner) — Standalone scanner service
 - [prompt-injection-testing](https://github.com/ambushalgorithm/prompt-injection-testing) — Test sample generation
 - [prompt-guard](https://github.com/seojoonkim/prompt-guard) — Regex patterns
 - [detect-injection](https://github.com/protectai/detect-injection) — ML detection
-- [openclaw-shield](https://github.com/knostic/openclaw-shield) — Secrets/PII
 
 ---
 

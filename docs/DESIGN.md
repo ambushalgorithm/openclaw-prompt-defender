@@ -2,8 +2,9 @@
 
 **Project:** openclaw-prompt-defender  
 **Date:** 2026-02-14  
-**Status:** Phase 3a - Complete (v3.1.0 encoding bypass fix)  
-**Repository:** https://github.com/ambushalgorithm/openclaw-prompt-defender
+**Status:** Phase 3a - Complete  
+**Repository:** https://github.com/ambushalgorithm/openclaw-prompt-defender  
+**Scanner Repository:** https://github.com/ambushalgorithm/prompt-defender-scanner
 
 ---
 
@@ -60,6 +61,29 @@ Adversaries can inject malicious instructions into tool outputs:
 ---
 
 ## Architecture
+
+### Two-Repo Design
+
+```
+┌─────────────────────────────┐      ┌─────────────────────────────┐
+│  openclaw-prompt-defender  │      │  prompt-defender-scanner    │
+│  (This repo)               │      │  (Separate repo)            │
+│                            │      │                             │
+│  • Plugin (TypeScript)     │ ──►  │  • Scanner (Python)         │
+│  • OpenClaw integration    │ HTTP │  • Pattern matching         │
+│  • Hook handlers           │      │  • ML inference (optional)  │
+└─────────────────────────────┘      └─────────────────────────────┘
+```
+
+**This repo (`openclaw-prompt-defender`):**
+- Plugin — drops into OpenClaw
+- Configuration
+- Documentation
+
+**Separate repo (`prompt-defender-scanner`):**
+- Python service that performs the actual scanning
+- Runs standalone (Docker, pip, or direct)
+- Communicates via HTTP API
 
 ### Plugin Gateway Pattern
 
@@ -419,13 +443,15 @@ Service error → ALLOW + log error
 ### ✅ Phase 1-2: Infrastructure (Complete)
 
 - [x] Plugin skeleton (TypeScript)
-- [x] Service skeleton (Python/FastAPI)
+- [x] Scanner service (Python/FastAPI) — moved to [prompt-defender-scanner](https://github.com/ambushalgorithm/prompt-defender-scanner)
 - [x] `/scan` endpoint
 - [x] Persistent logging (JSONL)
 - [x] Docker support
 - [x] Basic pattern detection
 
-### 🔄 Phase 3a: prompt-guard (4 Weeks)
+### 🔄 Phase 3a: prompt-guard (Complete)
+
+The scanner now lives in a separate repo: [prompt-defender-scanner](https://github.com/ambushalgorithm/prompt-defender-scanner)
 
 **Week 1: Pattern Conversion**
 - [ ] Port 500+ YAML patterns to Python
@@ -584,6 +610,7 @@ Service error → ALLOW + log error
 
 ## References
 
+- [prompt-defender-scanner](https://github.com/ambushalgorithm/prompt-defender-scanner) — Standalone scanner service
 - [prompt-guard repository](https://github.com/seojoonkim/prompt-guard)
 - [detect-injection repository](https://github.com/protectai/detect-injection)
 - [openclaw-shield repository](https://github.com/knostic/openclaw-shield)
