@@ -19,24 +19,18 @@
 - 👤 **PII exposure** — Personal information that shouldn't be shared
 - 💉 **Malicious content** — XSS, SQL injection, RCE attempts
 
-## ⚠️ Two Repos
+## ⚠️ Requirements
 
-This plugin requires the **prompt-defender-scanner** service to work:
+This plugin works with any scanner service that implements the required API.
 
-| Repo | Description |
-|------|-------------|
-| **openclaw-prompt-defender-plugin** | This plugin — drops into OpenClaw |
-| **prompt-defender-scanner** | The scanner service — must be running separately |
+| Component | Status | Description |
+|-----------|--------|-------------|
+| **openclaw-prompt-defender-plugin** | **Required** | This plugin — drops into OpenClaw |
+| **Scanner service** | **Recommended** | Any service that implements `/scan` endpoint (default: prompt-defender-scanner) |
 
-## 🚀 Quick Start
+### Recommended Scanner
 
-### Prerequisites
-
-- OpenClaw v2026.2.4+
-- Python 3.12+ (for the scanner)
-- Docker (optional, for the scanner)
-
-### Step 1: Start the Scanner
+The [prompt-defender-scanner](https://github.com/ambushalgorithm/prompt-defender-scanner) is the recommended scanner:
 
 ```bash
 # Option A: Clone and run directly
@@ -50,7 +44,30 @@ python -m app
 docker run -d -p 8080:8080 ghcr.io/ambushalgorithm/prompt-defender-scanner
 ```
 
-### Step 2: Install the Plugin
+### Using a Custom Scanner
+
+The plugin calls `POST /scan` with:
+```json
+{"type": "output", "content": "...", "tool_name": "..."}
+```
+
+Expected response:
+```json
+{"action": "allow"}  // or "block" with reason
+```
+
+Configure your custom scanner:
+```json
+{
+  "plugins": {
+    "prompt-defender": {
+      "service_url": "http://your-scanner:8080"
+    }
+  }
+}
+```
+
+### Step 1: Install the Plugin
 
 ```bash
 # Clone this repo
@@ -61,7 +78,7 @@ cd openclaw-prompt-defender-plugin
 cp -r plugin ~/.openclaw/plugins/prompt-defender
 ```
 
-### Step 3: Configure OpenClaw
+### Step 2: Configure OpenClaw
 
 Add to your OpenClaw config:
 
