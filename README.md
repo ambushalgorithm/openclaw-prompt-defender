@@ -41,7 +41,7 @@ python -m app
 # Scanner runs on http://localhost:8080
 
 # Option B: Docker
-docker run -d -p 8080:8080 ghcr.io/ambushalgorithm/prompt-defender-scanner
+docker run -d --name prompt-defender-scanner -p 8080:8080 prompt-defender-scanner
 ```
 
 ### Using a Custom Scanner
