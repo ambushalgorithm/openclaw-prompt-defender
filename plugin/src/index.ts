@@ -12,6 +12,7 @@ interface ScanRequest {
   is_error: boolean;
   duration_ms: number;
   source?: string;
+  config?: Record<string, unknown>;
 }
 
 interface ScanResponse {
@@ -51,21 +52,11 @@ export default (api: OpenClawPluginApi) => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-      // Prepare headers with config and user ID
+      // Prepare headers
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         "Accept": "application/json",
       };
-      
-      // Pass configuration via header
-      if (config) {
-        headers["X-Config"] = JSON.stringify(config);
-      }
-      
-      // Pass session key for owner bypass (if available)
-      if (ctx.sessionKey) {
-        headers["X-Session-Key"] = ctx.sessionKey;
-      }
 
       const response = await fetch(`${serviceUrl}/scan`, {
         method: "POST",
@@ -77,6 +68,7 @@ export default (api: OpenClawPluginApi) => {
           is_error: event.isError,
           duration_ms: event.durationMs || 0,
           source: ctx.sessionKey,
+          config: config,
         } as ScanRequest),
         signal: controller.signal,
       });
