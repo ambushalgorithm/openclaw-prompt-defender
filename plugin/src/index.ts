@@ -6,13 +6,9 @@ import type {
 } from "./types/types.d.ts";
 
 interface ScanRequest {
-  type: "output";
-  tool_name: string;
   content: unknown;
-  is_error: boolean;
-  duration_ms: number;
-  source?: string;
-  config?: Record<string, unknown>;
+  features?: Record<string, boolean>;
+  scan_tier?: number;
 }
 
 interface ScanResponse {
@@ -25,51 +21,69 @@ interface ScanResponse {
     type: string;
     lang: string;
   }>;
-  owner_bypass?: boolean;
 }
 
 export default (api: OpenClawPluginApi) => {
   const config = api.pluginConfig || {};
+  
+  // Service configuration
   const serviceUrl = (config.service_url as string) || "http://localhost:8080";
   const timeoutMs = (config.timeout_ms as number) || 5000;
   const failOpen = config.fail_open !== false;
   const scanEnabled = config.scan_enabled !== false;
   
+  // Owner bypass - plugin handles this
+  const ownerIds = (config.owner_ids as string[]) || [];
+  
+  // Excluded tools - plugin handles this
+  const excludedTools = (config.excluded_tools as string[]) || [];
+  
   // Feature flags
-  const features = (config.features as any) || {};
+  const features = (config.features as Record<string, boolean>) || {};
   const promptGuardEnabled = features.prompt_guard !== false;
+  
+  // Scan tier
+  const scanTier = (config.scan_tier as number) || 1;
   
   api.logger.info(`Prompt Defender plugin initialized`);
   api.logger.info(`  Service URL: ${serviceUrl}`);
   api.logger.info(`  Features: prompt_guard=${promptGuardEnabled}`);
+  api.logger.info(`  Owner IDs: ${ownerIds.length > 0 ? ownerIds.join(', ') : '(none)'}`);
+  api.logger.info(`  Excluded tools: ${excludedTools.length > 0 ? excludedTools.join(', ') : '(none)'}`);
+
+  // Check if session should bypass scanning (owner)
+  const shouldBypass = (sessionKey?: string): boolean => {
+    if (!sessionKey || ownerIds.length === 0) return false;
+    return ownerIds.includes(sessionKey);
+  };
+
+  // Check if tool should be excluded from scanning
+  const isExcluded = (toolName: string): boolean => {
+    return excludedTools.includes(toolName);
+  };
 
   // Call the scanning service
   const scanContent = async (
-    event: PluginHookBeforeToolResultEvent,
-    ctx: PluginHookToolContext
+    content: unknown
   ): Promise<ScanResponse | null> => {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-      // Prepare headers
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+      // Build flattened request body
+      const requestBody: ScanRequest = {
+        content,
+        features,
+        scan_tier: scanTier
       };
 
       const response = await fetch(`${serviceUrl}/scan`, {
         method: "POST",
-        headers,
-        body: JSON.stringify({
-          type: "output",
-          tool_name: event.toolName,
-          content: event.content,
-          is_error: event.isError,
-          duration_ms: event.durationMs || 0,
-          source: ctx.sessionKey,
-          config: config,
-        } as ScanRequest),
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
@@ -122,18 +136,24 @@ export default (api: OpenClawPluginApi) => {
         return;
       }
 
+      // Check if tool is excluded
+      if (isExcluded(toolName)) {
+        api.logger.debug(`[Prompt Defender] Tool '${toolName}' is excluded from scanning`);
+        return;
+      }
+
+      // Check owner bypass
+      if (shouldBypass(ctx.sessionKey)) {
+        api.logger.info(`[Prompt Defender] Owner bypass for session ${ctx.sessionKey}`);
+        return;
+      }
+
       api.logger.info(`[Prompt Defender] Scanning tool result: ${toolName} (callId: ${toolCallId})`);
 
-      const result = await scanContent(event, ctx);
+      const result = await scanContent(content);
 
       if (!result) {
         // Fail-open: allow through
-        return;
-      }
-      
-      // Log owner bypass
-      if (result.owner_bypass) {
-        api.logger.info(`[Prompt Defender] Owner bypass for session ${ctx.sessionKey}`);
         return;
       }
 

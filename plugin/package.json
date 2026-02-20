@@ -5,9 +5,11 @@
   "main": "dist/prompt-defender/index.js",
   "scripts": {
     "build": "tsc && cp ./openclaw.plugin.json ./dist/prompt-defender/openclaw.plugin.json",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "vitest"
   },
   "devDependencies": {
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^2.1.9"
   }
 }
